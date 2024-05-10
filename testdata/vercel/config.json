@@ -1,0 +1,6 @@
+{
+  "apiKeySecretRef": {
+    "name": "vercel-credentials",
+    "key": "token"
+  }
+}

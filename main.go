@@ -1,11 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	extapi "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
@@ -13,6 +22,18 @@ import (
 )
 
 var GroupName = os.Getenv("GROUP_NAME")
+
+// PodNamespace is the namespace of the webhook pod
+var PodNamespace = os.Getenv("POD_NAMESPACE")
+
+// PodSecretName is the name of the secret to obtain the Vercel API token from
+var PodSecretName = os.Getenv("POD_SECRET_NAME")
+
+// PodSecretKey is the key of the Vercel API token within the secret POD_SECRET_NAME
+var PodSecretKey = os.Getenv("POD_SECRET_KEY")
+
+var Slug = os.Getenv("TEAM_SLUG")
+var TeamId = os.Getenv("TEAM_ID")
 
 func main() {
 	if GroupName == "" {
@@ -25,15 +46,15 @@ func main() {
 	// webhook, where the Name() method will be used to disambiguate between
 	// the different implementations.
 	cmd.RunWebhookServer(GroupName,
-		&customDNSProviderSolver{},
+		&vercelDNSProviderSolver{},
 	)
 }
 
-// customDNSProviderSolver implements the provider-specific logic needed to
-// 'present' an ACME challenge TXT record for your own DNS provider.
+// vercelDNSProviderSolver implements the provider-specific logic needed to
+// 'present' an ACME challenge TXT record to Vercel.
 // To do so, it must implement the `github.com/cert-manager/cert-manager/pkg/acme/webhook.Solver`
 // interface.
-type customDNSProviderSolver struct {
+type vercelDNSProviderSolver struct {
 	// If a Kubernetes 'clientset' is needed, you must:
 	// 1. uncomment the additional `client` field in this structure below
 	// 2. uncomment the "k8s.io/client-go/kubernetes" import at the top of the file
@@ -41,9 +62,11 @@ type customDNSProviderSolver struct {
 	// 4. ensure your webhook's service account has the required RBAC role
 	//    assigned to it for interacting with the Kubernetes APIs you need.
 	//client kubernetes.Clientset
+	client *kubernetes.Clientset
+	ctx    context.Context
 }
 
-// customDNSProviderConfig is a structure that is used to decode into when
+// vercelDNSProviderConfig is a structure that is used to decode into when
 // solving a DNS01 challenge.
 // This information is provided by cert-manager, and may be a reference to
 // additional configuration that's needed to solve the challenge for this
@@ -57,7 +80,7 @@ type customDNSProviderSolver struct {
 // You should not include sensitive information here. If credentials need to
 // be used by your provider here, you should reference a Kubernetes Secret
 // resource and fetch these credentials using a Kubernetes clientset.
-type customDNSProviderConfig struct {
+type vercelDNSProviderConfig struct {
 	// Change the two fields below according to the format of the configuration
 	// to be decoded.
 	// These fields will be set by users in the
@@ -65,6 +88,7 @@ type customDNSProviderConfig struct {
 
 	//Email           string `json:"email"`
 	//APIKeySecretRef v1alpha1.SecretKeySelector `json:"apiKeySecretRef"`
+	APIKeySecretRef cmmeta.SecretKeySelector `json:"apiKeySecretRef"`
 }
 
 // Name is used as the name for this DNS solver when referencing it on the ACME
@@ -73,8 +97,51 @@ type customDNSProviderConfig struct {
 // solvers configured with the same Name() **so long as they do not co-exist
 // within a single webhook deployment**.
 // For example, `cloudflare` may be used as the name of a solver.
-func (c *customDNSProviderSolver) Name() string {
-	return "my-custom-solver"
+func (c *vercelDNSProviderSolver) Name() string {
+	return "vercel"
+}
+
+func (c *vercelDNSProviderSolver) makeVercelRequest(method, baseURL string, body []byte, apiToken string, queryParams map[string]string) ([]byte, error) {
+	// Parse the base URL
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare query parameters
+	q := u.Query()
+	for key, value := range queryParams {
+		if value != "" {
+			q.Set(key, value)
+		}
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequest(method, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Authorization", "Bearer "+apiToken)
+	req.Header.Add("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("error from Vercel API: %s", respBody)
+	}
+
+	return respBody, nil
 }
 
 // Present is responsible for actually presenting the DNS record with the
@@ -82,28 +149,223 @@ func (c *customDNSProviderSolver) Name() string {
 // This method should tolerate being called multiple times with the same value.
 // cert-manager itself will later perform a self check to ensure that the
 // solver has correctly configured the DNS provider.
-func (c *customDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
+// func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
+// 	cfg, err := loadConfig(ch.Config)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// TODO: do something more useful with the decoded configuration
+// 	fmt.Printf("Decoded configuration %v", cfg)
+
+// 	// TODO: add code that sets a record in the DNS provider's console
+// 	return nil
+// }
+
+// CleanUp should delete the relevant TXT record from the DNS provider console.
+// If multiple TXT records exist with the same record name (e.g.
+// _acme-challenge.vercel.com) then **only** the record with the same `key`
+// value provided on the ChallengeRequest should be cleaned up.
+// This is in order to facilitate multiple DNS validations for the same domain
+// concurrently.
+// func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
+// 	// TODO: add code that deletes a record from the DNS provider's console
+// 	return nil
+// }
+
+// getSecret retrieves the secret value using the provided client, namespace, secret name, and key.
+func getSecret(client kubernetes.Interface, namespace, secretName, key string) (string, error) {
+	secret, err := client.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get secret %s in namespace %s: %v", secretName, namespace, err)
+	}
+
+	// Extract the value from the secret's data using the key
+	valueBytes, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("key %s not found in secret %s", key, secretName)
+	}
+
+	// Convert the secret data to a string
+	return string(valueBytes), nil
+}
+
+// getVercelDomains retrieves all domains from Vercel for the account associated with the given API token.
+func getVercelDomains(apiToken string) ([]string, error) {
+	var domains []string
+	url := "https://api.vercel.com/v5/domains"
+
+	for {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Add("Authorization", "Bearer "+apiToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("failed to fetch domains: %s", resp.Status)
+		}
+
+		var data struct {
+			Domains []struct {
+				Name string `json:"name"`
+			} `json:"domains"`
+			Pagination struct {
+				Next string `json:"next"`
+			} `json:"pagination"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+			return nil, err
+		}
+
+		for _, domain := range data.Domains {
+			domains = append(domains, domain.Name)
+		}
+
+		if data.Pagination.Next == "" {
+			break
+		}
+		url = data.Pagination.Next
+	}
+
+	return domains, nil
+}
+
+// matchDomain finds the most specific domain match for a given FQDN from a list of domains.
+func matchDomain(fqdn string, domains []string) (string, error) {
+	fqdn = strings.Trim(fqdn, ".") // clean up the FQDN
+	fqdnParts := strings.Split(fqdn, ".")
+
+	for len(fqdnParts) > 1 {
+		candidate := strings.Join(fqdnParts, ".")
+		for _, domain := range domains {
+			if candidate == domain {
+				return domain, nil
+			}
+		}
+		fqdnParts = fqdnParts[1:] // Remove the left-most segment
+	}
+
+	return "", fmt.Errorf("no matching domain found for FQDN: %s", fqdn)
+}
+
+func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
 
-	// TODO: do something more useful with the decoded configuration
-	fmt.Printf("Decoded configuration %v", cfg)
+	apiToken, err := getSecret(c.client, ch.ResourceNamespace, cfg.APIKeySecretRef.Name, cfg.APIKeySecretRef.Key)
+	if err != nil {
+		return fmt.Errorf("unable to get API token: %v", err)
+	}
 
-	// TODO: add code that sets a record in the DNS provider's console
-	return nil
+	domains, err := getVercelDomains(apiToken)
+	if err != nil {
+		return fmt.Errorf("unable to fetch domains from Vercel: %v", err)
+	}
+
+	domain, err := matchDomain(ch.ResolvedFQDN, domains)
+	if err != nil {
+		return err
+	}
+
+	// Here we use fmt.Sprintf to interpolate the domain into the URL
+	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
+
+	queryParams := map[string]string{
+		"slug":   Slug,
+		"teamId": TeamId,
+	}
+
+	// Define the DNS record
+	record := map[string]string{
+		"name":    ch.ResolvedFQDN,
+		"type":    "TXT",
+		"value":   ch.Key,
+		"ttl":     "60",
+		"comment": "Added by rhythmbhiwani/cert-manager-webhook-vercel",
+	}
+	recordJSON, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.makeVercelRequest("POST", url, recordJSON, apiToken, queryParams)
+	return err
 }
 
-// CleanUp should delete the relevant TXT record from the DNS provider console.
-// If multiple TXT records exist with the same record name (e.g.
-// _acme-challenge.example.com) then **only** the record with the same `key`
-// value provided on the ChallengeRequest should be cleaned up.
-// This is in order to facilitate multiple DNS validations for the same domain
-// concurrently.
-func (c *customDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
-	// TODO: add code that deletes a record from the DNS provider's console
-	return nil
+func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
+	cfg, err := loadConfig(ch.Config)
+	if err != nil {
+		return err
+	}
+
+	apiToken, err := getSecret(c.client, ch.ResourceNamespace, cfg.APIKeySecretRef.Name, cfg.APIKeySecretRef.Key)
+	if err != nil {
+		return fmt.Errorf("unable to get API token: %v", err)
+	}
+
+	domains, err := getVercelDomains(apiToken)
+	if err != nil {
+		return fmt.Errorf("unable to fetch domains from Vercel: %v", err)
+	}
+
+	domain, err := matchDomain(ch.ResolvedFQDN, domains)
+	if err != nil {
+		return err
+	}
+
+	// Interpolate the domain into the URL
+	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
+
+	queryParams := map[string]string{
+		"slug":   Slug,
+		"teamId": TeamId,
+	}
+
+	// Fetch all records for the domain
+	responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken, queryParams)
+	if err != nil {
+		return fmt.Errorf("failed to fetch DNS records: %v", err)
+	}
+
+	// Parse the response body to find the correct record
+	var records struct {
+		Records []struct {
+			Id    string `json:"id"`
+			Name  string `json:"name"`
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(responseBody, &records); err != nil {
+		return fmt.Errorf("error decoding response JSON: %v", err)
+	}
+
+	// Find the record ID
+	recordID := ""
+	for _, record := range records.Records {
+		if record.Name == strings.TrimSuffix(ch.ResolvedFQDN, ".") && record.Type == "TXT" && record.Value == ch.Key {
+			recordID = record.Id
+			break
+		}
+	}
+
+	if recordID == "" {
+		return fmt.Errorf("no matching TXT record found for deletion")
+	}
+
+	// Delete the identified record
+	deleteURL := fmt.Sprintf("%s/%s", url, recordID)
+	_, err = c.makeVercelRequest("DELETE", deleteURL, nil, apiToken, queryParams)
+	return err
 }
 
 // Initialize will be called when the webhook first starts.
@@ -115,16 +377,16 @@ func (c *customDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 // provider accounts.
 // The stopCh can be used to handle early termination of the webhook, in cases
 // where a SIGTERM or similar signal is sent to the webhook process.
-func (c *customDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan struct{}) error {
+func (c *vercelDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stopCh <-chan struct{}) error {
 	///// UNCOMMENT THE BELOW CODE TO MAKE A KUBERNETES CLIENTSET AVAILABLE TO
 	///// YOUR CUSTOM DNS PROVIDER
 
-	//cl, err := kubernetes.NewForConfig(kubeClientConfig)
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//c.client = cl
+	cl, err := kubernetes.NewForConfig(kubeClientConfig)
+	if err != nil {
+		return err
+	}
+
+	c.client = cl
 
 	///// END OF CODE TO MAKE KUBERNETES CLIENTSET AVAILABLE
 	return nil
@@ -132,8 +394,8 @@ func (c *customDNSProviderSolver) Initialize(kubeClientConfig *rest.Config, stop
 
 // loadConfig is a small helper function that decodes JSON configuration into
 // the typed config struct.
-func loadConfig(cfgJSON *extapi.JSON) (customDNSProviderConfig, error) {
-	cfg := customDNSProviderConfig{}
+func loadConfig(cfgJSON *extapi.JSON) (vercelDNSProviderConfig, error) {
+	cfg := vercelDNSProviderConfig{}
 	// handle the 'base case' where no configuration has been provided
 	if cfgJSON == nil {
 		return cfg, nil
