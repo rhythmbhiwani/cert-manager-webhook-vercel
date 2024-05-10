@@ -21,7 +21,7 @@ func TestRunsSuite(t *testing.T) {
 	fixture := acmetest.NewFixture(&vercelDNSProviderSolver{},
 		acmetest.SetResolvedZone(zone),
 		acmetest.SetAllowAmbientCredentials(false),
-		acmetest.SetManifestPath("testdata/my-custom-solver"),
+		acmetest.SetManifestPath("testdata/vercel"),
 	)
 	// solver := vercel.New("59351")
 	// fixture := acmetest.NewFixture(solver,

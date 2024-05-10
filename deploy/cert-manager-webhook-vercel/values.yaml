@@ -18,10 +18,10 @@ fullnameOverride: ''
 # solve the DNS01 challenge.
 # This group name should be **unique**, hence using your own company's domain
 # here is recommended.
-groupName: acme.rhythmbhiwani.com
+groupName: acme.rhythmbhiwani.in
 image:
   pullPolicy: IfNotPresent
-  repository: ghcr.io/rhythmbhiwani/cert-manager-webhook-vercel
+  repository: ghcr.io/rhythmbhiwani/cert-manager-webhook-vercel:v1.0.1
   tag: latest
 nameOverride: ''
 nodeSelector: {}
