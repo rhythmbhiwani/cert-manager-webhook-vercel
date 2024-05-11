@@ -122,8 +122,12 @@ jobs:
 
       - name: Commit changes
         run: |
-          git add .
-          git commit -m "Update version in specified files"
+          if [[ -n $(git status -s) ]]; then
+            git add .
+            git commit -m "Update version in specified files"
+          else
+            echo "No changes to commit."
+          fi
 
       - name: Push changes
         uses: ad-m/github-push-action@v0.5.0
