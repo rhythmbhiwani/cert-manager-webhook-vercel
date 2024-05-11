@@ -4,13 +4,13 @@ certManager:
   namespace: cert-manager
   serviceAccountName: cert-manager
 deployment:
-  logLevel: 6
+  logLevel: 2
 fullnameOverride: ''
 groupName: acme.rhythmbhiwani.in
 image:
   pullPolicy: IfNotPresent
   repository: ghcr.io/rhythmbhiwani/cert-manager-webhook-vercel
-  tag: v1.0.2
+  tag: v0.0.1
 nameOverride: ''
 nodeSelector: {}
 replicaCount: 1
