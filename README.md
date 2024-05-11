@@ -1,58 +1,79 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/cert-manager/cert-manager/d53c0b9270f8cd90d908460d69502694e1838f5f/logo/logo-small.png" height="256" width="256" alt="cert-manager project logo" />
-</p>
+# Cert-Manager ACME DNS01 Webhook Solver for Vercel DNS Manager
 
-# ACME webhook example
+[![Go Report Card](https://goreportcard.com/badge/github.com/rhythmbhiwani/cert-manager-webhook-vercel)](https://goreportcard.com/report/github.com/rhythmbhiwani/cert-manager-webhook-vercel)
+[![Releases](https://img.shields.io/github/v/release/rhythmbhiwani/cert-manager-webhook-vercel?include_prereleases)](https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases)
+[![LICENSE](https://img.shields.io/github/license/rhythmbhiwani/cert-manager-webhook-vercel)](https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/blob/master/LICENSE)
 
-The ACME issuer type supports an optional 'webhook' solver, which can be used
-to implement custom DNS01 challenge solving logic.
+A webhook to use [Vercel DNS Manager](https://vercel.com/docs/projects/domains) as a DNS01
+ACME Issuer for [cert-manager](https://github.com/jetstack/cert-manager).
 
-This is useful if you need to use cert-manager with a DNS provider that is not
-officially supported in cert-manager core.
+## Installation
 
-## Why not in core?
+```bash
+helm install cert-manager-webhook-vercel \
+  --namespace cert-manager \
+  https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases/download/latest/cert-manager-webhook-vercel-v1.0.0.tgz
+```
 
-As the project & adoption has grown, there has been an influx of DNS provider
-pull requests to our core codebase. As this number has grown, the test matrix
-has become un-maintainable and so, it's not possible for us to certify that
-providers work to a sufficient level.
+## Usage
 
-By creating this 'interface' between cert-manager and DNS providers, we allow
-users to quickly iterate and test out new integrations, and then packaging
-those up themselves as 'extensions' to cert-manager.
+### Create Vercel API Token Secret
 
-We can also then provide a standardised 'testing framework', or set of
-conformance tests, which allow us to validate the a DNS provider works as
-expected.
+Get your vercel token from https://vercel.com/account/tokens with proper scope
 
-## Creating your own webhook
+```bash
+kubectl create secret generic vercel-credentials \
+  --namespace=cert-manager \
+  --from-literal=token=<VERCEL TOKEN>
+```
 
-Webhook's themselves are deployed as Kubernetes API services, in order to allow
-administrators to restrict access to webhooks with Kubernetes RBAC.
+### Create Issuer
 
-This is important, as otherwise it'd be possible for anyone with access to your
-webhook to complete ACME challenge validations and obtain certificates.
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: example@example.com
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+      - dns01:
+          cnameStrategy: Follow
+          webhook:
+            config:
+              apiKeySecretRef:
+                key: token
+                name: vercel-credentials
+              teamId: ""
+              teamSlug: ""
+            groupName: acme.rhythmbhiwani.in
+            solverName: vercel
+```
 
-To make the set up of these webhook's easier, we provide a template repository
-that can be used to get started quickly.
+Fill appropriate details above in the config. If your domains are under specific team, you can enter their `teamId` or `teamSlug` or both.
 
-### Creating your own repository
+If your domains are not using `CNAME`, then you can remove the line `cnameStrategy: Follow`.
+
+## Development
 
 ### Running the test suite
 
-All DNS providers **must** run the DNS01 provider conformance testing suite,
-else they will have undetermined behaviour when used with cert-manager.
+Conformance testing is achieved through Kubernetes emulation via the
+kubebuilder-tools suite, in conjunction with real calls to the Vercel API on an
+test domain, using a valid API token.
 
-**It is essential that you configure and run the test suite when creating a
-DNS01 webhook.**
+The test configures a cert-manager-dns01-tests TXT entry, attempts to verify its
+presence, and removes the entry, thereby verifying the Prepare and CleanUp
+functions.
 
-An example Go test file has been provided in [main_test.go](https://github.com/cert-manager/webhook-vercel/blob/master/main_test.go).
-
-You can run the test suite with:
+Run the test suite with:
 
 ```bash
-$ TEST_ZONE_NAME=example.com. make test
+export VERCEL_TOKEN=$(echo -n "<your API token>" | base64 -w 0)
+envsubst < testdata/vercel/secret.yaml.example > testdata/vercel/secret.yaml
+TEST_ZONE_NAME=yourdomain.com. make test
 ```
-
-The example file has a number of areas you must fill in and replace with your
-own options in order for tests to pass.

@@ -1,33 +1,22 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	extapi "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook/cmd"
 )
 
 var GroupName = os.Getenv("GROUP_NAME")
-
-var queryParams = map[string]string{
-	"slug":   "",
-	"teamId": "",
-}
 
 func main() {
 	if GroupName == "" {
@@ -57,7 +46,6 @@ type vercelDNSProviderSolver struct {
 	//    assigned to it for interacting with the Kubernetes APIs you need.
 	//client kubernetes.Clientset
 	client *kubernetes.Clientset
-	ctx    context.Context
 }
 
 // vercelDNSProviderConfig is a structure that is used to decode into when
@@ -97,236 +85,39 @@ func (c *vercelDNSProviderSolver) Name() string {
 	return "vercel"
 }
 
-func (c *vercelDNSProviderSolver) makeVercelRequest(method, baseURL string, body []byte, apiToken string) ([]byte, error) {
-	// Parse the base URL
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		log.Printf("Error parsing base URL: %v", err)
-		return nil, err
-	}
-	log.Printf("Parsed base URL: %s", u.String())
-
-	// Prepare query parameters
-	q := u.Query()
-	for key, value := range queryParams {
-		if value != "" {
-			q.Set(key, value)
-		}
-	}
-	u.RawQuery = q.Encode()
-
-	log.Printf("Final URL with query parameters: %s", u.String())
-
-	req, err := http.NewRequest(method, u.String(), bytes.NewReader(body))
-	if err != nil {
-		log.Printf("Error creating HTTP request: %v", err)
-		return nil, err
-	}
-	log.Printf("Created HTTP request: %+v", req)
-
-	// Encode the API token before adding it to the header
-	token := strings.TrimSpace(apiToken)
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	log.Printf("Created HTTP request: %+v", req)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Error sending HTTP request: %v", err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	log.Printf("Received HTTP response with status code: %d", resp.StatusCode)
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Error reading response body: %v", err)
-		return nil, err
-	}
-
-	if resp.StatusCode >= 400 {
-		log.Printf("Error from Vercel API: %s", respBody)
-		return nil, fmt.Errorf("error from Vercel API: %s", respBody)
-	}
-
-	return respBody, nil
-}
-
 // Present is responsible for actually presenting the DNS record with the
 // DNS provider.
 // This method should tolerate being called multiple times with the same value.
 // cert-manager itself will later perform a self check to ensure that the
 // solver has correctly configured the DNS provider.
-// func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
-// 	cfg, err := loadConfig(ch.Config)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// TODO: do something more useful with the decoded configuration
-// 	fmt.Printf("Decoded configuration %v", cfg)
-
-// 	// TODO: add code that sets a record in the DNS provider's console
-// 	return nil
-// }
-
-// CleanUp should delete the relevant TXT record from the DNS provider console.
-// If multiple TXT records exist with the same record name (e.g.
-// _acme-challenge.vercel.com) then **only** the record with the same `key`
-// value provided on the ChallengeRequest should be cleaned up.
-// This is in order to facilitate multiple DNS validations for the same domain
-// concurrently.
-// func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
-// 	// TODO: add code that deletes a record from the DNS provider's console
-// 	return nil
-// }
-
-// getSecret retrieves the secret value using the provided client, namespace, secret name, and key.
-func getSecret(client kubernetes.Interface, namespace, secretName, key string) (string, error) {
-	println("namespace", namespace)
-	println("secretName", secretName)
-	println("key", key)
-	secret, err := client.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("failed to get secret %s in namespace %s: %v", secretName, namespace, err)
-	}
-
-	// Print metadata
-	fmt.Printf("Secret Metadata:\n")
-	fmt.Printf("Name: %s\n", secret.ObjectMeta.Name)
-	fmt.Printf("Namespace: %s\n", secret.ObjectMeta.Namespace)
-	fmt.Printf("Labels: %v\n", secret.ObjectMeta.Labels)
-	fmt.Printf("Annotations: %v\n", secret.ObjectMeta.Annotations)
-
-	// Print data
-	fmt.Printf("Secret Data:\n")
-	for key, value := range secret.Data {
-		fmt.Printf("%s: %s\n", key, value)
-	}
-
-	// Print the entire secret as JSON
-	secretJSON, err := json.Marshal(secret)
-	if err != nil {
-		fmt.Printf("Failed to marshal secret as JSON: %v\n", err)
-	}
-	fmt.Printf("Secret (JSON):\n%s\n", secretJSON)
-
-	// Extract the value from the secret's data using the key
-	valueBytes, ok := secret.Data[key]
-	if !ok {
-		return "", fmt.Errorf("key %s not found in secret %s", key, secretName)
-	}
-
-	// Convert the secret data to a string
-	return string(valueBytes), nil
-}
-
-// getVercelDomains retrieves all domains from Vercel for the account associated with the given API token.
-func getVercelDomains(c *vercelDNSProviderSolver, apiToken string) ([]string, error) {
-	var domains []string
-	url := "https://api.vercel.com/v5/domains"
-
-	println("API TOKEN", apiToken)
-
-	for {
-
-		responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken)
-		if err != nil {
-			return nil, err
-		}
-
-		var data struct {
-			Domains []struct {
-				Name string `json:"name"`
-			} `json:"domains"`
-			Pagination struct {
-				Next string `json:"next"`
-			} `json:"pagination"`
-		}
-
-		if err := json.Unmarshal(responseBody, &data); err != nil {
-			return nil, fmt.Errorf("error decoding response JSON: %v", err)
-		}
-
-		for _, domain := range data.Domains {
-			domains = append(domains, domain.Name)
-		}
-
-		if data.Pagination.Next == "" {
-			break
-		}
-		url = data.Pagination.Next
-	}
-
-	return domains, nil
-}
-
-// matchDomain finds the most specific domain match for a given FQDN from a list of domains.
-func matchDomain(fqdn string, domains []string) (string, error) {
-	fqdn = strings.Trim(fqdn, ".") // clean up the FQDN
-	fqdnParts := strings.Split(fqdn, ".")
-
-	for len(fqdnParts) > 1 {
-		candidate := strings.Join(fqdnParts, ".")
-		for _, domain := range domains {
-			if candidate == domain {
-				return domain, nil
-			}
-		}
-		fqdnParts = fqdnParts[1:] // Remove the left-most segment
-	}
-
-	return "", fmt.Errorf("no matching domain found for FQDN: %s", fqdn)
-}
-
 func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
+	klog.V(6).Infof("Presented with challenge for fqdn=%s zone=%s", ch.ResolvedFQDN, ch.ResolvedZone)
+
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Challenge Request:")
-	fmt.Println("Domain:", ch.ResolvedFQDN)
-	fmt.Println("Key:", ch.Key)
-	fmt.Println("Auth Zone:", ch.ResolvedZone)
-
-	// Print the whole ChallengeRequest struct as JSON
-	chJSON, err := json.Marshal(ch)
-	if err != nil {
-		return err
+	var queryParams = map[string]string{
+		"slug":   cfg.TeamSlug,
+		"teamId": cfg.TeamId,
 	}
-	fmt.Println("Challenge Request (JSON):", string(chJSON))
-
-	queryParams["slug"] = cfg.TeamSlug
-	queryParams["teamId"] = cfg.TeamId
 
 	apiToken, err := getSecret(c.client, ch.ResourceNamespace, cfg.APIKeySecretRef.Name, cfg.APIKeySecretRef.Key)
 	if err != nil {
 		return fmt.Errorf("unable to get API token: %v", err)
 	}
 
-	domains, err := getVercelDomains(c, apiToken)
-	if err != nil {
-		return fmt.Errorf("unable to fetch domains from Vercel: %v", err)
-	}
-
-	domain, err := matchDomain(ch.ResolvedFQDN, domains)
+	domain, err := fetchDomainName(c, apiToken, queryParams, ch.ResolvedFQDN)
 	if err != nil {
 		return err
 	}
 
-	// Here we use fmt.Sprintf to interpolate the domain into the URL
 	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
 
 	// Define the DNS record
-	// Remove *. from ch.ResolvedFQDN if it exists anywhere
-	recordName := strings.Replace(ch.ResolvedFQDN, "*.", "", -1)
-	println("NEW RECORD NAME", recordName)
 	record := map[string]interface{}{
-		"name":    recordName,
+		"name":    ch.ResolvedFQDN,
 		"type":    "TXT",
 		"value":   ch.Key,
 		"ttl":     60,
@@ -337,14 +128,25 @@ func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 		return err
 	}
 
-	_, err = c.makeVercelRequest("POST", url, recordJSON, apiToken)
+	_, err = c.makeVercelRequest("POST", url, recordJSON, apiToken, queryParams)
 	return err
 }
 
+// CleanUp should delete the relevant TXT record from the DNS provider console.
+// If multiple TXT records exist with the same record name (e.g.
+// _acme-challenge.vercel.com) then **only** the record with the same `key`
+// value provided on the ChallengeRequest should be cleaned up.
+// This is in order to facilitate multiple DNS validations for the same domain
+// concurrently.
 func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 	cfg, err := loadConfig(ch.Config)
 	if err != nil {
 		return err
+	}
+
+	var queryParams = map[string]string{
+		"slug":   cfg.TeamSlug,
+		"teamId": cfg.TeamId,
 	}
 
 	apiToken, err := getSecret(c.client, ch.ResourceNamespace, cfg.APIKeySecretRef.Name, cfg.APIKeySecretRef.Key)
@@ -352,21 +154,15 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 		return fmt.Errorf("unable to get API token: %v", err)
 	}
 
-	domains, err := getVercelDomains(c, apiToken)
-	if err != nil {
-		return fmt.Errorf("unable to fetch domains from Vercel: %v", err)
-	}
-
-	domain, err := matchDomain(ch.ResolvedFQDN, domains)
+	domain, err := fetchDomainName(c, apiToken, queryParams, ch.ResolvedFQDN)
 	if err != nil {
 		return err
 	}
 
-	// Interpolate the domain into the URL
 	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
 
 	// Fetch all records for the domain
-	responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken)
+	responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken, queryParams)
 	if err != nil {
 		return fmt.Errorf("failed to fetch DNS records: %v", err)
 	}
@@ -384,22 +180,10 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 		return fmt.Errorf("error decoding response JSON: %v", err)
 	}
 
-	for _, record := range records.Records {
-		fmt.Printf("Record ID: %s\n", record.Id)
-		fmt.Printf("Name: %s\n", record.Name)
-		fmt.Printf("Type: %s\n", record.Type)
-		fmt.Printf("Value: %s\n", record.Value)
-		fmt.Println("---------------------------")
-	}
-
-	recordName := strings.Replace(ch.ResolvedFQDN, "*.", "", -1)
-	fmt.Println("ch.ResolvedFQDN", ch.ResolvedFQDN)
-	fmt.Println("strings.TrimSuffix(ch.ResolvedFQDN, '.')", strings.TrimSuffix(ch.ResolvedFQDN, "."+domain))
-
 	// Find the record ID
 	recordID := ""
 	for _, record := range records.Records {
-		if record.Name == strings.TrimSuffix(recordName, "."+domain+".") && record.Type == "TXT" && record.Value == ch.Key {
+		if record.Name == strings.TrimSuffix(ch.ResolvedFQDN, "."+domain+".") && record.Type == "TXT" && record.Value == ch.Key {
 			recordID = record.Id
 			break
 		}
@@ -411,7 +195,7 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 
 	// Delete the identified record
 	deleteURL := fmt.Sprintf("%s/%s", url, recordID)
-	_, err = c.makeVercelRequest("DELETE", deleteURL, nil, apiToken)
+	_, err = c.makeVercelRequest("DELETE", deleteURL, nil, apiToken, queryParams)
 	return err
 }
 
