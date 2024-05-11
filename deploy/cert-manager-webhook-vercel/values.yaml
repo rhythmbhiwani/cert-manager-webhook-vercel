@@ -15,7 +15,7 @@ certManager:
 
 image:
   repository: ghcr.io/rhythmbhiwani/cert-manager-webhook-vercel
-  tag: v1.0.1
+  tag: v1.0.0
   pullPolicy: IfNotPresent
 
 nameOverride: ""
