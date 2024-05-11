@@ -5,10 +5,6 @@ certManager:
   serviceAccountName: cert-manager
 deployment:
   logLevel: 6
-  secretKey: token
-  secretName: vercel-credentials
-  teamId: ''
-  teamSlug: ''
 fullnameOverride: ''
 groupName: acme.rhythmbhiwani.in
 image:
@@ -17,6 +13,7 @@ image:
   tag: v1.0.2
 nameOverride: ''
 nodeSelector: {}
+replicaCount: 1
 resources: {}
 service:
   port: 443

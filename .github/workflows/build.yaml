@@ -7,7 +7,6 @@ name: Build And Push Docker Image
 
 on:
   push:
-    branches: ["main"]
     # Publish semver tags as releases.
     tags: ["v*.*.*"]
 
@@ -93,3 +92,17 @@ jobs:
         # This step uses the identity token to provision an ephemeral certificate
         # against the sigstore community Fulcio instance.
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+      # Package Helm chart into a TGZ file with version
+      - name: Package Helm chart
+        run: tar -czvf cert-manager-webhook-vercel-${{ github.event.inputs.tag }}.tgz deploy/cert-manager-webhook-vercel
+
+      # Upload the TGZ file as an artifact to the release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: cert-manager-webhook-vercel-${{ github.event.inputs.tag }}
+          path: cert-manager-webhook-vercel-${{ github.event.inputs.tag }}.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NAME: ${{ github.event.inputs.tag }}

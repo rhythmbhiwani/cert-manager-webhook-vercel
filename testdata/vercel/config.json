@@ -2,5 +2,7 @@
   "apiKeySecretRef": {
     "name": "vercel-credentials",
     "key": "token"
-  }
+  },
+  "teamSlug": "",
+  "teamId": ""
 }

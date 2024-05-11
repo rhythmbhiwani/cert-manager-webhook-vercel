@@ -24,17 +24,10 @@ import (
 
 var GroupName = os.Getenv("GROUP_NAME")
 
-// PodNamespace is the namespace of the webhook pod
-var PodNamespace = os.Getenv("POD_NAMESPACE")
-
-// PodSecretName is the name of the secret to obtain the Vercel API token from
-var PodSecretName = os.Getenv("POD_SECRET_NAME")
-
-// PodSecretKey is the key of the Vercel API token within the secret POD_SECRET_NAME
-var PodSecretKey = os.Getenv("POD_SECRET_KEY")
-
-var Slug = os.Getenv("TEAM_SLUG")
-var TeamId = os.Getenv("TEAM_ID")
+var queryParams = map[string]string{
+	"slug":   "",
+	"teamId": "",
+}
 
 func main() {
 	if GroupName == "" {
@@ -90,6 +83,8 @@ type vercelDNSProviderConfig struct {
 	//Email           string `json:"email"`
 	//APIKeySecretRef v1alpha1.SecretKeySelector `json:"apiKeySecretRef"`
 	APIKeySecretRef cmmeta.SecretKeySelector `json:"apiKeySecretRef"`
+	TeamSlug        string                   `json:"teamSlug,omitempty"`
+	TeamId          string                   `json:"teamId,omitempty"`
 }
 
 // Name is used as the name for this DNS solver when referencing it on the ACME
@@ -102,7 +97,7 @@ func (c *vercelDNSProviderSolver) Name() string {
 	return "vercel"
 }
 
-func (c *vercelDNSProviderSolver) makeVercelRequest(method, baseURL string, body []byte, apiToken string, queryParams map[string]string) ([]byte, error) {
+func (c *vercelDNSProviderSolver) makeVercelRequest(method, baseURL string, body []byte, apiToken string) ([]byte, error) {
 	// Parse the base URL
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -235,14 +230,10 @@ func getVercelDomains(c *vercelDNSProviderSolver, apiToken string) ([]string, er
 	url := "https://api.vercel.com/v5/domains"
 
 	println("API TOKEN", apiToken)
-	queryParams := map[string]string{
-		"slug":   Slug,
-		"teamId": TeamId,
-	}
 
 	for {
 
-		responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken, queryParams)
+		responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken)
 		if err != nil {
 			return nil, err
 		}
@@ -309,6 +300,9 @@ func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 	}
 	fmt.Println("Challenge Request (JSON):", string(chJSON))
 
+	queryParams["slug"] = cfg.TeamSlug
+	queryParams["teamId"] = cfg.TeamId
+
 	apiToken, err := getSecret(c.client, ch.ResourceNamespace, cfg.APIKeySecretRef.Name, cfg.APIKeySecretRef.Key)
 	if err != nil {
 		return fmt.Errorf("unable to get API token: %v", err)
@@ -327,14 +321,12 @@ func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 	// Here we use fmt.Sprintf to interpolate the domain into the URL
 	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
 
-	queryParams := map[string]string{
-		"slug":   Slug,
-		"teamId": TeamId,
-	}
-
 	// Define the DNS record
+	// Remove *. from ch.ResolvedFQDN if it exists anywhere
+	recordName := strings.Replace(ch.ResolvedFQDN, "*.", "", -1)
+	println("NEW RECORD NAME", recordName)
 	record := map[string]interface{}{
-		"name":    ch.ResolvedFQDN,
+		"name":    recordName,
 		"type":    "TXT",
 		"value":   ch.Key,
 		"ttl":     60,
@@ -345,7 +337,7 @@ func (c *vercelDNSProviderSolver) Present(ch *v1alpha1.ChallengeRequest) error {
 		return err
 	}
 
-	_, err = c.makeVercelRequest("POST", url, recordJSON, apiToken, queryParams)
+	_, err = c.makeVercelRequest("POST", url, recordJSON, apiToken)
 	return err
 }
 
@@ -373,13 +365,8 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 	// Interpolate the domain into the URL
 	url := fmt.Sprintf("https://api.vercel.com/v2/domains/%s/records", domain)
 
-	queryParams := map[string]string{
-		"slug":   Slug,
-		"teamId": TeamId,
-	}
-
 	// Fetch all records for the domain
-	responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken, queryParams)
+	responseBody, err := c.makeVercelRequest("GET", url, nil, apiToken)
 	if err != nil {
 		return fmt.Errorf("failed to fetch DNS records: %v", err)
 	}
@@ -405,13 +392,14 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 		fmt.Println("---------------------------")
 	}
 
+	recordName := strings.Replace(ch.ResolvedFQDN, "*.", "", -1)
 	fmt.Println("ch.ResolvedFQDN", ch.ResolvedFQDN)
 	fmt.Println("strings.TrimSuffix(ch.ResolvedFQDN, '.')", strings.TrimSuffix(ch.ResolvedFQDN, "."+domain))
 
 	// Find the record ID
 	recordID := ""
 	for _, record := range records.Records {
-		if record.Name == strings.TrimSuffix(ch.ResolvedFQDN, "."+domain+".") && record.Type == "TXT" && record.Value == ch.Key {
+		if record.Name == strings.TrimSuffix(recordName, "."+domain+".") && record.Type == "TXT" && record.Value == ch.Key {
 			recordID = record.Id
 			break
 		}
@@ -423,7 +411,7 @@ func (c *vercelDNSProviderSolver) CleanUp(ch *v1alpha1.ChallengeRequest) error {
 
 	// Delete the identified record
 	deleteURL := fmt.Sprintf("%s/%s", url, recordID)
-	_, err = c.makeVercelRequest("DELETE", deleteURL, nil, apiToken, queryParams)
+	_, err = c.makeVercelRequest("DELETE", deleteURL, nil, apiToken)
 	return err
 }
 

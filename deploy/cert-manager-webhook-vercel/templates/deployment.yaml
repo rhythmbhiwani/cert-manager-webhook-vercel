@@ -34,14 +34,6 @@ spec:
           env:
             - name: GROUP_NAME
               value: {{ .Values.groupName | quote }}
-            - name: POD_SECRET_NAME
-              value: {{ .Values.deployment.secretName | quote }} 
-            - name: POD_SECRET_KEY
-              value: {{ .Values.deployment.secretKey | quote }}
-            - name: TEAM_SLUG
-              value: {{ .Values.deployment.teamSlug | quote }} 
-            - name: TEAM_ID
-              value: {{ .Values.deployment.teamId | quote }} 
           ports:
             - name: https
               containerPort: 443
