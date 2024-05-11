@@ -120,6 +120,9 @@ jobs:
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+      - name: Add exception for repository directory
+        run: git config --global --add safe.directory /github/workspace
+
       - name: Commit changes
         run: |
           if [[ -n $(git status -s) ]]; then
