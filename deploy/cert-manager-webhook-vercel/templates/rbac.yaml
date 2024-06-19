@@ -64,6 +64,9 @@ metadata:
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
   - apiGroups:
       - {{ .Values.groupName }}
     resources:
