@@ -2,6 +2,15 @@ apiVersion: v1
 entries:
   cert-manager-webhook-vercel:
   - apiVersion: v2
+    appVersion: v1.1.0
+    created: "2024-06-20T10:12:31.832427876Z"
+    description: A Helm chart for cert-manager-webhook-vercel
+    digest: 1c4229b56afe7a3c2e895edd98064e9b21decbccce6d251546be930b1e24133a
+    name: cert-manager-webhook-vercel
+    urls:
+    - https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases/download/cert-manager-webhook-vercel-v1.1.0/cert-manager-webhook-vercel-v1.1.0.tgz
+    version: v1.1.0
+  - apiVersion: v2
     appVersion: v1.0.1
     created: "2024-05-11T18:43:06.378199352Z"
     description: A Helm chart for cert-manager-webhook-vercel
@@ -19,4 +28,4 @@ entries:
     urls:
     - https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases/download/cert-manager-webhook-vercel-v1.0.0/cert-manager-webhook-vercel-v1.0.0.tgz
     version: v1.0.0
-generated: "2024-05-11T18:47:08.081004317Z"
+generated: "2024-06-20T10:12:31.832438325Z"
