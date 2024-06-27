@@ -12,7 +12,7 @@ ACME Issuer for [cert-manager](https://github.com/jetstack/cert-manager).
 ```bash
 helm install cert-manager-webhook-vercel \
   --namespace cert-manager \
-  https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases/download/cert-manager-webhook-vercel-v1.1.0/cert-manager-webhook-vercel-v1.1.0.tgz
+  https://github.com/rhythmbhiwani/cert-manager-webhook-vercel/releases/download/cert-manager-webhook-vercel-v0.0.1/cert-manager-webhook-vercel-v0.0.1.tgz
 ```
 
 ## Usage
