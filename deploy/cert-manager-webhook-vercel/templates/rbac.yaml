@@ -87,8 +87,8 @@ roleRef:
 subjects:
   - apiGroup: ""
     kind: ServiceAccount
-    name: {{ include "cert-manager-webhook-vercel.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ .Values.certManager.serviceAccountName }}
+    namespace: {{ .Values.certManager.namespace }}
 ---
 # Grant the webhook permission to read the Secret containing the Vercel API token
 apiVersion: rbac.authorization.k8s.io/v1
